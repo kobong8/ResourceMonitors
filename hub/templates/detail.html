@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ hostname }} – Resource Monitor</title>
+<style>
+  :root {
+    --bg:       #f0f2f5;
+    --card:     #ffffff;
+    --border:   #e2e8f0;
+    --text:     #1a202c;
+    --text-sub: #718096;
+    --primary:  #3182ce;
+    --online:   #38a169;
+    --offline:  #e53e3e;
+    --warning:  #d69e2e;
+    --shadow:   0 1px 4px rgba(0,0,0,.08);
+    --radius:   10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: var(--bg); color: var(--text); }
+
+  .header {
+    background: var(--card); border-bottom: 1px solid var(--border);
+    padding: 0 24px; display: flex; align-items: center; justify-content: space-between;
+    height: 60px; position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow);
+  }
+  .header-title { font-size: 18px; font-weight: 700; color: var(--primary); }
+  .header-nav a {
+    color: var(--text-sub); text-decoration: none; font-size: 14px;
+    margin-left: 20px; padding: 4px 8px; border-radius: 6px;
+  }
+  .header-nav a:hover { background: var(--bg); color: var(--text); }
+
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+  /* Breadcrumb */
+  .breadcrumb { font-size: 13px; color: var(--text-sub); margin-bottom: 20px; }
+  .breadcrumb a { color: var(--primary); text-decoration: none; }
+  .breadcrumb a:hover { text-decoration: underline; }
+  .breadcrumb span { margin: 0 6px; }
+
+  /* 페이지 헤더 */
+  .page-header {
+    display: flex; align-items: center; gap: 14px; margin-bottom: 24px; flex-wrap: wrap;
+  }
+  .status-dot {
+    width: 14px; height: 14px; border-radius: 50%;
+  }
+  .status-dot.online  { background: var(--online); box-shadow: 0 0 0 4px rgba(56,161,105,.2); }
+  .status-dot.offline { background: var(--offline); }
+  .page-title { font-size: 24px; font-weight: 700; }
+  .page-meta  { color: var(--text-sub); font-size: 14px; margin-top: 2px; }
+  .badge-remote {
+    font-size: 12px; padding: 4px 12px; border-radius: 20px;
+    background: #fff3cd; color: #856404; border: 1px solid #ffc107;
+  }
+  .badge-os {
+    font-size: 12px; padding: 4px 10px; border-radius: 6px;
+    background: #ebf8ff; color: #2b6cb0;
+  }
+  .auto-refresh { margin-left: auto; font-size: 12px; color: var(--text-sub); }
+
+  /* 그리드 레이아웃 */
+  .section-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .full-width { grid-column: 1 / -1; }
+
+  /* 공통 카드 */
+  .card {
+    background: var(--card); border-radius: var(--radius);
+    border: 1px solid var(--border); box-shadow: var(--shadow); overflow: hidden;
+  }
+  .card-title {
+    padding: 12px 16px; font-size: 13px; font-weight: 700;
+    border-bottom: 1px solid var(--border); color: var(--text-sub);
+    text-transform: uppercase; letter-spacing: .5px;
+    background: #f7fafc;
+  }
+  .card-body { padding: 16px; }
+
+  /* 게이지 */
+  .gauge-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .gauge-wrap { text-align: center; }
+  .gauge-canvas { display: block; margin: 0 auto 8px; }
+  .gauge-label { font-size: 13px; color: var(--text-sub); }
+  .gauge-value { font-size: 22px; font-weight: 700; }
+  .gauge-detail { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
+
+  /* 리소스 바 */
+  .res-row { margin-bottom: 14px; }
+  .res-row:last-child { margin-bottom: 0; }
+  .res-label {
+    display: flex; justify-content: space-between;
+    font-size: 13px; color: var(--text-sub); margin-bottom: 6px;
+  }
+  .res-label strong { color: var(--text); }
+  .res-bar { height: 8px; background: #edf2f7; border-radius: 4px; overflow: hidden; }
+  .res-bar-fill { height: 100%; border-radius: 4px; transition: width .3s; }
+  .bar-cpu   { background: #3182ce; }
+  .bar-mem   { background: #805ad5; }
+  .bar-gpu   { background: #e53e3e; }
+  .bar-gmem  { background: #dd6b20; }
+
+  /* GPU 카드 */
+  .gpu-card {
+    background: #fff5f5; border-radius: 8px; border: 1px solid #fed7d7;
+    padding: 12px; margin-bottom: 12px;
+  }
+  .gpu-card:last-child { margin-bottom: 0; }
+  .gpu-name { font-size: 13px; font-weight: 700; margin-bottom: 10px; color: #c53030; }
+  .gpu-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+               margin-bottom: 10px; }
+  .gpu-stat { text-align: center; }
+  .gpu-stat .sv { font-size: 18px; font-weight: 700; }
+  .gpu-stat .sk { font-size: 11px; color: var(--text-sub); }
+
+  /* 세션 테이블 */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { padding: 8px 10px; text-align: left; background: #f7fafc;
+       border-bottom: 2px solid var(--border); font-size: 12px;
+       color: var(--text-sub); text-transform: uppercase; letter-spacing: .4px; }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #f7fafc; }
+  .no-data { text-align: center; padding: 24px; color: var(--text-sub); font-size: 13px; }
+
+  /* 프로그램 상태 */
+  .prog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+  .prog-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .prog-item.yes { background: #e6ffed; border-color: #9ae6b4; }
+  .prog-item.no  { background: #fff5f5; border-color: #feb2b2; color: #9b2335; }
+  .prog-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .prog-dot.yes { background: var(--online); }
+  .prog-dot.no  { background: var(--offline); }
+
+  /* 차트 */
+  .chart-container { position: relative; }
+  canvas.chart { width: 100%; height: 160px; display: block; }
+
+  /* 오프라인 안내 */
+  .offline-banner {
+    background: #fff5f5; border: 1px solid #fed7d7; border-radius: var(--radius);
+    padding: 24px; text-align: center; margin-bottom: 24px;
+  }
+  .offline-banner h3 { color: var(--offline); margin-bottom: 8px; }
+
+  @media (max-width: 700px) {
+    .container { padding: 14px; }
+    .gauge-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-title">Resource Monitor Hub</div>
+  <nav class="header-nav">
+    <a href="/">대시보드</a>
+    <a href="/settings">설정</a>
+  </nav>
+</header>
+
+<div class="container">
+
+  <!-- 브레드크럼 -->
+  <div class="breadcrumb">
+    <a href="/">대시보드</a>
+    <span>›</span>
+    {{ hostname }}
+  </div>
+
+  <!-- 페이지 헤더 -->
+  {% set d = computer.data %}
+  <div class="page-header">
+    <div class="status-dot {{ 'online' if computer.online else 'offline' }}"></div>
+    <div>
+      <div class="page-title">{{ hostname }}</div>
+      <div class="page-meta">
+        {{ computer.ip_address or '–' }}
+        &nbsp;·&nbsp;
+        마지막 갱신:
+        {{ computer.last_seen[:19].replace('T',' ') if computer.last_seen else '알 수 없음' }}
+      </div>
+    </div>
+    {% if computer.online %}
+      <span class="badge-os">{{ d.get('os','') }}</span>
+      {% if d.get('has_remote_connection') %}
+      <span class="badge-remote">원격 접속 중</span>
+      {% endif %}
+    {% endif %}
+    <div class="auto-refresh">자동 갱신: <span id="countdown">30</span>초</div>
+  </div>
+
+  {% if not computer.online %}
+  <div class="offline-banner">
+    <h3>오프라인</h3>
+    <p>에이전트로부터 응답이 없습니다. 컴퓨터가 꺼져 있거나 네트워크 연결을 확인해주세요.</p>
+  </div>
+  {% endif %}
+
+  <!-- ── CPU / Memory ── -->
+  <div class="section-grid">
+    <div class="card">
+      <div class="card-title">CPU</div>
+      <div class="card-body">
+        {% set cpu = d.get('cpu', {}) %}
+        <div style="text-align:center;margin-bottom:12px;">
+          <canvas id="cpuGauge" width="140" height="140" class="gauge-canvas"></canvas>
+          <div class="gauge-label">사용률</div>
+          <div class="gauge-value">{{ cpu.get('percent', 0) | round(1) }}%</div>
+          <div class="gauge-detail">
+            물리 {{ cpu.get('count_physical','?') }}코어 /
+            논리 {{ cpu.get('count_logical','?') }}스레드
+            {% if cpu.get('freq_mhz') %} · {{ (cpu.freq_mhz/1000)|round(2) }} GHz{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Memory</div>
+      <div class="card-body">
+        {% set mem = d.get('memory', {}) %}
+        <div style="text-align:center;margin-bottom:12px;">
+          <canvas id="memGauge" width="140" height="140" class="gauge-canvas"></canvas>
+          <div class="gauge-label">사용률</div>
+          <div class="gauge-value">{{ mem.get('percent', 0) | round(1) }}%</div>
+          <div class="gauge-detail">
+            {{ mem.get('used_gb',0)|round(1) }} GB 사용 /
+            {{ mem.get('total_gb',0)|round(1) }} GB 전체
+            (여유 {{ mem.get('available_gb',0)|round(1) }} GB)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GPU 카드들 -->
+    {% set gpus = d.get('gpu', []) %}
+    {% if gpus %}
+    <div class="card {% if gpus|length > 2 %}full-width{% endif %}">
+      <div class="card-title">GPU ({{ gpus|length }}개)</div>
+      <div class="card-body">
+        {% for gpu in gpus %}
+        <div class="gpu-card">
+          <div class="gpu-name">GPU {{ gpu.index }} — {{ gpu.name }}</div>
+          <div class="gpu-stats">
+            <div class="gpu-stat">
+              <div class="sv" style="color:#e53e3e;">{{ gpu.get('utilization_percent',0) or 0 }}%</div>
+              <div class="sk">GPU 사용률</div>
+            </div>
+            <div class="gpu-stat">
+              <div class="sv" style="color:#dd6b20;">{{ gpu.get('memory_percent',0)|round(1) }}%</div>
+              <div class="sk">VRAM 사용률</div>
+            </div>
+            <div class="gpu-stat">
+              <div class="sv" style="color:#718096;">
+                {{ gpu.get('temperature_c','–') }}{% if gpu.get('temperature_c') %}°C{% endif %}
+              </div>
+              <div class="sk">온도</div>
+            </div>
+          </div>
+          <div class="res-row">
+            <div class="res-label">
+              <span>GPU 연산</span>
+              <span>{{ gpu.get('utilization_percent',0) or 0 }}%</span>
+            </div>
+            <div class="res-bar">
+              <div class="res-bar-fill bar-gpu"
+                   style="width:{{ gpu.get('utilization_percent',0) or 0 }}%"></div>
+            </div>
+          </div>
+          <div class="res-row">
+            <div class="res-label">
+              <span>VRAM</span>
+              <span>{{ (gpu.get('memory_used_mb',0)/1024)|round(1) }} /
+                    {{ (gpu.get('memory_total_mb',0)/1024)|round(1) }} GB</span>
+            </div>
+            <div class="res-bar">
+              <div class="res-bar-fill bar-gmem"
+                   style="width:{{ gpu.get('memory_percent',0) or 0 }}%"></div>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div><!-- /section-grid -->
+
+  <!-- ── 원격 접속 세션 ── -->
+  <div class="section-grid">
+    <div class="card">
+      <div class="card-title">원격 접속 세션</div>
+      <div class="card-body" style="padding:0;">
+        {% set sessions = d.get('remote_sessions', []) %}
+        {% if sessions %}
+        <table>
+          <thead>
+            <tr>
+              <th>유형</th>
+              <th>사용자</th>
+              <th>원격 IP</th>
+              <th>상태</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in sessions %}
+            <tr>
+              <td><strong>{{ s.get('type','–') }}</strong></td>
+              <td>{{ s.get('user','–') }}</td>
+              <td>{{ s.get('remote_ip','–') }}</td>
+              <td>
+                <span style="color:var(--online);font-weight:600;">
+                  {{ s.get('state','–') }}
+                </span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="no-data">현재 원격 접속 없음</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- ── 실행 중인 프로그램 ── -->
+    <div class="card">
+      <div class="card-title">모니터링 프로그램 – 실행 여부</div>
+      <div class="card-body">
+        {% set running = d.get('running_programs', {}) %}
+        {% if running %}
+        <div class="prog-grid">
+          {% for name, status in running.items() %}
+          <div class="prog-item {{ 'yes' if status else 'no' }}">
+            <div class="prog-dot {{ 'yes' if status else 'no' }}"></div>
+            {{ name }}
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="no-data">모니터링 대상 프로그램 없음</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- ── 설치된 프로그램 ── -->
+    <div class="card">
+      <div class="card-title">모니터링 프로그램 – 설치 여부</div>
+      <div class="card-body">
+        {% set installed = d.get('installed_programs', {}) %}
+        {% if installed %}
+        <div class="prog-grid">
+          {% for name, status in installed.items() %}
+          <div class="prog-item {{ 'yes' if status else 'no' }}">
+            <div class="prog-dot {{ 'yes' if status else 'no' }}"></div>
+            {{ name }}
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="no-data">모니터링 대상 프로그램 없음</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 1시간 히스토리 차트 ── -->
+  <div class="card full-width" style="margin-bottom:24px;">
+    <div class="card-title">리소스 사용 추이 (최근 1시간)</div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;flex-wrap:wrap;">
+        <div class="chart-container">
+          <canvas id="cpuChart" height="140"></canvas>
+        </div>
+        <div class="chart-container">
+          <canvas id="memChart" height="140"></canvas>
+        </div>
+        {% for idx, gpu_h in history.gpu.items() %}
+        <div class="chart-container">
+          <canvas id="gpuChart{{ idx }}" height="140"></canvas>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+/* ── 반원 게이지 ── */
+function drawGauge(canvasId, pct, color) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const cx = canvas.width / 2, cy = canvas.height / 2;
+  const r = cx - 14;
+  const start = Math.PI, end = 2 * Math.PI;
+  const filled = start + (end - start) * Math.min(pct / 100, 1);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // 배경 아크
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, start, end);
+  ctx.strokeStyle = '#edf2f7';
+  ctx.lineWidth = 14;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  // 채운 아크
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, start, filled);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 14;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+}
+
+/* ── 꺾은선 히스토리 차트 ── */
+function drawLineChart(canvasId, data, label, color) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !data || data.length === 0) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.parentElement.clientWidth || 500;
+  const H = 140;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const pad = { top: 24, right: 16, bottom: 20, left: 38 };
+  const cw = W - pad.left - pad.right;
+  const ch = H - pad.top  - pad.bottom;
+
+  // 배경
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, W, H);
+
+  // 그리드
+  ctx.strokeStyle = '#e2e8f0';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + ch * i / 4;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(W - pad.right, y);
+    ctx.stroke();
+    ctx.fillStyle = '#a0aec0';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${100 - i * 25}%`, pad.left - 4, y + 4);
+  }
+
+  // 데이터 포인트 필터
+  const valid = data.filter(v => v !== null && v !== undefined);
+  if (valid.length === 0) return;
+
+  const xs = data.map((_, i) => pad.left + i * cw / (data.length - 1 || 1));
+  const ys = data.map(v => pad.top + ch * (1 - Math.min(v ?? 0, 100) / 100));
+
+  // 채우기
+  ctx.beginPath();
+  ctx.moveTo(xs[0], H - pad.bottom);
+  data.forEach((v, i) => {
+    if (v !== null && v !== undefined) ctx.lineTo(xs[i], ys[i]);
+  });
+  ctx.lineTo(xs[data.length - 1], H - pad.bottom);
+  ctx.closePath();
+  ctx.fillStyle = color + '22';
+  ctx.fill();
+
+  // 선
+  ctx.beginPath();
+  let first = true;
+  data.forEach((v, i) => {
+    if (v === null || v === undefined) { first = true; return; }
+    if (first) { ctx.moveTo(xs[i], ys[i]); first = false; }
+    else ctx.lineTo(xs[i], ys[i]);
+  });
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // 레이블
+  ctx.fillStyle = '#4a5568';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(label, pad.left, pad.top - 8);
+
+  // 현재 값
+  const last = [...data].reverse().find(v => v !== null && v !== undefined);
+  if (last !== undefined) {
+    ctx.fillStyle = color;
+    ctx.textAlign = 'right';
+    ctx.fillText(last.toFixed(1) + '%', W - pad.right, pad.top - 8);
+  }
+}
+
+/* ── 데이터 주입 ── */
+const historyData = {{ history | tojson }};
+
+window.addEventListener('load', () => {
+  // 게이지
+  drawGauge('cpuGauge', {{ d.get('cpu',{}).get('percent', 0) }}, '#3182ce');
+  drawGauge('memGauge', {{ d.get('memory',{}).get('percent', 0) }}, '#805ad5');
+
+  // 히스토리 차트
+  drawLineChart('cpuChart', historyData.cpu, 'CPU 사용률', '#3182ce');
+  drawLineChart('memChart', historyData.memory, 'Memory 사용률', '#805ad5');
+
+  {% for idx, gpu_h in history.gpu.items() %}
+  drawLineChart(
+    'gpuChart{{ idx }}',
+    historyData.gpu['{{ idx }}'].utilization,
+    'GPU {{ idx }} ({{ history.gpu[idx].name }}) 연산',
+    '#e53e3e'
+  );
+  {% endfor %}
+});
+
+/* ── 자동 갱신 ── */
+let sec = 30;
+setInterval(() => {
+  sec--;
+  document.getElementById('countdown').textContent = sec;
+  if (sec <= 0) location.reload();
+}, 1000);
+</script>
+</body>
+</html>

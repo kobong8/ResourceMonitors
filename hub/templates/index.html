@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Resource Monitor Hub</title>
+<style>
+  :root {
+    --bg:        #f0f2f5;
+    --card:      #ffffff;
+    --border:    #e2e8f0;
+    --text:      #1a202c;
+    --text-sub:  #718096;
+    --primary:   #3182ce;
+    --online:    #38a169;
+    --offline:   #e53e3e;
+    --warning:   #d69e2e;
+    --shadow:    0 1px 4px rgba(0,0,0,.08);
+    --radius:    10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* ── 헤더 ── */
+  .header {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    height: 60px; position: sticky; top: 0; z-index: 100;
+    box-shadow: var(--shadow);
+  }
+  .header-title { font-size: 18px; font-weight: 700; color: var(--primary); }
+  .header-title span { font-weight: 400; color: var(--text-sub); font-size: 14px; margin-left: 8px; }
+  .header-nav a {
+    color: var(--text-sub); text-decoration: none; font-size: 14px;
+    margin-left: 20px; padding: 4px 8px; border-radius: 6px;
+    transition: background .15s;
+  }
+  .header-nav a:hover { background: var(--bg); color: var(--text); }
+  .header-nav a.active { color: var(--primary); font-weight: 600; }
+
+  /* ── 본문 ── */
+  .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+
+  /* ── 요약 카드 ── */
+  .summary { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .stat-card {
+    background: var(--card); border-radius: var(--radius); padding: 16px 24px;
+    border: 1px solid var(--border); flex: 1; min-width: 160px;
+    box-shadow: var(--shadow);
+  }
+  .stat-card .label { font-size: 12px; color: var(--text-sub); text-transform: uppercase;
+                       letter-spacing: .5px; margin-bottom: 6px; }
+  .stat-card .value { font-size: 32px; font-weight: 700; }
+  .stat-card.total  .value { color: var(--primary); }
+  .stat-card.online .value { color: var(--online); }
+  .stat-card.offline .value { color: var(--offline); }
+
+  /* ── 툴바 ── */
+  .toolbar {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .search-box {
+    flex: 1; min-width: 200px; max-width: 340px;
+    padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; outline: none; background: var(--card);
+  }
+  .search-box:focus { border-color: var(--primary); }
+  .filter-btns { display: flex; gap: 6px; }
+  .filter-btn {
+    padding: 7px 16px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--card); font-size: 13px; cursor: pointer;
+    transition: all .15s; color: var(--text-sub);
+  }
+  .filter-btn:hover { border-color: var(--primary); color: var(--primary); }
+  .filter-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .refresh-info { margin-left: auto; font-size: 12px; color: var(--text-sub); }
+  #countdown { font-weight: 600; color: var(--primary); }
+
+  /* ── 컴퓨터 그리드 ── */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--card); border-radius: var(--radius);
+    border: 1px solid var(--border); box-shadow: var(--shadow);
+    overflow: hidden; transition: transform .15s, box-shadow .15s;
+    cursor: pointer; text-decoration: none; color: inherit; display: block;
+  }
+  .card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,.12); }
+  .card.offline { opacity: .7; }
+
+  .card-header {
+    padding: 14px 16px; display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+  }
+  .status-dot.online  { background: var(--online); box-shadow: 0 0 0 3px rgba(56,161,105,.2); }
+  .status-dot.offline { background: var(--offline); }
+  .card-host { font-size: 15px; font-weight: 700; flex: 1; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
+  .card-ip   { font-size: 12px; color: var(--text-sub); }
+  .badge-remote {
+    font-size: 11px; padding: 2px 8px; border-radius: 12px;
+    background: #fff3cd; color: #856404; border: 1px solid #ffc107;
+    white-space: nowrap;
+  }
+
+  .card-body { padding: 14px 16px; }
+
+  /* ── 리소스 바 ── */
+  .res-row { margin-bottom: 10px; }
+  .res-label {
+    display: flex; justify-content: space-between;
+    font-size: 12px; color: var(--text-sub); margin-bottom: 4px;
+  }
+  .res-bar { height: 6px; background: #edf2f7; border-radius: 3px; overflow: hidden; }
+  .res-bar-fill { height: 100%; border-radius: 3px; transition: width .3s; }
+  .bar-cpu    { background: #3182ce; }
+  .bar-mem    { background: #805ad5; }
+  .bar-gpu    { background: #e53e3e; }
+  .bar-gmem   { background: #dd6b20; }
+
+  /* GPU 섹션 */
+  .gpu-section { margin-top: 6px; }
+  .gpu-title { font-size: 11px; color: var(--text-sub); margin-bottom: 6px;
+               font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
+
+  /* ── 오프라인 메시지 ── */
+  .offline-msg {
+    text-align: center; padding: 20px 0; color: var(--text-sub); font-size: 13px;
+  }
+  .offline-msg .last-seen { font-size: 11px; margin-top: 4px; }
+
+  /* ── 프로그램 뱃지 ── */
+  .prog-row { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .prog-badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    border: 1px solid;
+  }
+  .prog-badge.running   { background: #e6ffed; color: #276749; border-color: #9ae6b4; }
+  .prog-badge.stopped   { background: #fff5f5; color: #9b2335; border-color: #feb2b2; }
+
+  .card-footer {
+    padding: 8px 16px; background: #f7fafc; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text-sub);
+  }
+
+  /* ── OS 배지 ── */
+  .os-badge {
+    font-size: 11px; padding: 2px 7px; border-radius: 4px;
+    background: #ebf8ff; color: #2b6cb0;
+  }
+
+  /* ── 빈 상태 ── */
+  .empty-state {
+    text-align: center; padding: 60px 20px; color: var(--text-sub);
+  }
+  .empty-state h3 { margin-bottom: 8px; font-size: 18px; }
+
+  @media (max-width: 600px) {
+    .container { padding: 16px; }
+    .summary   { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-title">
+    Resource Monitor Hub
+    <span>내부망 컴퓨터 모니터링</span>
+  </div>
+  <nav class="header-nav">
+    <a href="/" class="active">대시보드</a>
+    <a href="/settings">설정</a>
+  </nav>
+</header>
+
+<div class="container">
+
+  <!-- 요약 통계 -->
+  <div class="summary">
+    <div class="stat-card total">
+      <div class="label">전체 컴퓨터</div>
+      <div class="value">{{ total_count }}</div>
+    </div>
+    <div class="stat-card online">
+      <div class="label">온라인</div>
+      <div class="value">{{ online_count }}</div>
+    </div>
+    <div class="stat-card offline">
+      <div class="label">오프라인</div>
+      <div class="value">{{ offline_count }}</div>
+    </div>
+  </div>
+
+  <!-- 툴바 -->
+  <div class="toolbar">
+    <input class="search-box" type="text" id="searchInput"
+           placeholder="컴퓨터 이름 또는 IP 검색..." oninput="applyFilter()">
+    <div class="filter-btns">
+      <button class="filter-btn active" onclick="setFilter('all',this)">전체</button>
+      <button class="filter-btn" onclick="setFilter('online',this)">온라인</button>
+      <button class="filter-btn" onclick="setFilter('offline',this)">오프라인</button>
+    </div>
+    <div class="refresh-info">자동 갱신: <span id="countdown">30</span>초</div>
+  </div>
+
+  <!-- 컴퓨터 그리드 -->
+  {% if computers %}
+  <div class="grid" id="computerGrid">
+    {% for c in computers %}
+    {% set d = c.data %}
+    <a class="card {% if not c.online %}offline{% endif %}"
+       href="/computer/{{ c.hostname }}"
+       data-hostname="{{ c.hostname }}"
+       data-ip="{{ c.ip_address }}"
+       data-status="{{ 'online' if c.online else 'offline' }}">
+
+      <div class="card-header">
+        <div class="status-dot {{ 'online' if c.online else 'offline' }}"></div>
+        <div class="card-host">{{ c.hostname }}</div>
+        {% if c.online and c.data.get('has_remote_connection') %}
+        <span class="badge-remote">원격접속 중</span>
+        {% endif %}
+      </div>
+
+      <div class="card-body">
+        {% if c.online %}
+
+          <!-- CPU -->
+          {% set cpu = d.get('cpu', {}) %}
+          <div class="res-row">
+            <div class="res-label">
+              <span>CPU</span>
+              <span>{{ cpu.get('percent', 0) | round(1) }}%
+                ({{ cpu.get('count_physical', '?') }}코어)</span>
+            </div>
+            <div class="res-bar">
+              <div class="res-bar-fill bar-cpu"
+                   style="width:{{ cpu.get('percent', 0) }}%"></div>
+            </div>
+          </div>
+
+          <!-- Memory -->
+          {% set mem = d.get('memory', {}) %}
+          <div class="res-row">
+            <div class="res-label">
+              <span>Memory</span>
+              <span>{{ mem.get('percent', 0) | round(1) }}%
+                ({{ mem.get('used_gb', 0) | round(1) }} /
+                 {{ mem.get('total_gb', 0) | round(1) }} GB)</span>
+            </div>
+            <div class="res-bar">
+              <div class="res-bar-fill bar-mem"
+                   style="width:{{ mem.get('percent', 0) }}%"></div>
+            </div>
+          </div>
+
+          <!-- GPU(s) -->
+          {% set gpus = d.get('gpu', []) %}
+          {% if gpus %}
+          <div class="gpu-section">
+            <div class="gpu-title">GPU ({{ gpus|length }}개)</div>
+            {% for gpu in gpus %}
+            <div class="res-row">
+              <div class="res-label">
+                <span style="font-size:11px;max-width:180px;overflow:hidden;
+                             text-overflow:ellipsis;white-space:nowrap;">
+                  {{ gpu.name }}</span>
+                <span>{{ gpu.get('utilization_percent', 0) }}%
+                  {% if gpu.get('temperature_c') %}
+                  / {{ gpu.temperature_c }}°C
+                  {% endif %}
+                </span>
+              </div>
+              <div class="res-bar">
+                <div class="res-bar-fill bar-gpu"
+                     style="width:{{ gpu.get('utilization_percent', 0) or 0 }}%"></div>
+              </div>
+              <div class="res-label" style="margin-top:2px;">
+                <span style="font-size:10px;color:#a0aec0;">VRAM</span>
+                <span style="font-size:10px;">
+                  {{ gpu.get('memory_percent', 0) | round(1) }}%
+                  ({{ (gpu.get('memory_used_mb',0)/1024)|round(1) }} /
+                   {{ (gpu.get('memory_total_mb',0)/1024)|round(1) }} GB)
+                </span>
+              </div>
+              <div class="res-bar">
+                <div class="res-bar-fill bar-gmem"
+                     style="width:{{ gpu.get('memory_percent', 0) or 0 }}%"></div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          <!-- 실행 중인 프로그램 뱃지 -->
+          {% set running = d.get('running_programs', {}) %}
+          {% if running %}
+          <div class="prog-row">
+            {% for name, status in running.items() %}
+            <span class="prog-badge {{ 'running' if status else 'stopped' }}">
+              {{ name }}
+            </span>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+        {% else %}
+          <!-- 오프라인 상태 -->
+          <div class="offline-msg">
+            오프라인
+            <div class="last-seen">
+              마지막 확인: {{ c.last_seen[:19].replace('T',' ') if c.last_seen else '알 수 없음' }}
+            </div>
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="card-footer">
+        <span>{{ c.ip_address or '–' }}</span>
+        {% if c.online %}
+        &nbsp;·&nbsp;
+        <span class="os-badge">{{ d.get('os', '') }}</span>
+        {% endif %}
+        <span style="float:right;">
+          {{ c.last_seen[:19].replace('T',' ') if c.last_seen else '' }}
+        </span>
+      </div>
+
+    </a>
+    {% endfor %}
+  </div>
+
+  {% else %}
+  <div class="empty-state">
+    <h3>등록된 컴퓨터가 없습니다</h3>
+    <p>에이전트를 각 컴퓨터에 설치하고 실행하면 자동으로 등록됩니다.</p>
+  </div>
+  {% endif %}
+
+</div><!-- /container -->
+
+<script>
+  let currentFilter = 'all';
+
+  function setFilter(f, btn) {
+    currentFilter = f;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    applyFilter();
+  }
+
+  function applyFilter() {
+    const q = document.getElementById('searchInput').value.toLowerCase().trim();
+    document.querySelectorAll('#computerGrid .card').forEach(card => {
+      const hostname = card.dataset.hostname.toLowerCase();
+      const ip = card.dataset.ip.toLowerCase();
+      const status = card.dataset.status;
+
+      const matchSearch = !q || hostname.includes(q) || ip.includes(q);
+      const matchFilter = currentFilter === 'all' || status === currentFilter;
+
+      card.style.display = (matchSearch && matchFilter) ? 'block' : 'none';
+    });
+  }
+
+  /* ── 자동 갱신 카운트다운 ── */
+  let seconds = 30;
+  setInterval(() => {
+    seconds--;
+    document.getElementById('countdown').textContent = seconds;
+    if (seconds <= 0) {
+      location.reload();
+    }
+  }, 1000);
+</script>
+</body>
+</html>

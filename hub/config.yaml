@@ -1,0 +1,24 @@
+# ──────────────────────────────────────────────────────────
+# Resource Monitor Hub 설정 파일
+# ──────────────────────────────────────────────────────────
+
+server:
+  host: "0.0.0.0"      # 모든 인터페이스에서 수신
+  port: 5000
+  # 반드시 랜덤한 값으로 변경하세요 (python -c "import secrets; print(secrets.token_hex(32))")
+  secret_key: "CHANGE_THIS_TO_A_STRONG_RANDOM_SECRET_KEY"
+  debug: false          # 운영 환경에서는 반드시 false
+
+security:
+  # 에이전트 인증에 사용되는 API 키
+  # agent/config.yaml 의 hub.api_key 와 동일한 값으로 설정
+  api_key: "CHANGE_THIS_TO_A_STRONG_RANDOM_KEY"
+  # 웹 UI 접근 허용 IP/CIDR 목록 (설정 페이지에서도 변경 가능)
+  # 빈 목록이면 모든 IP 허용
+  # 예: ["192.168.1.0/24", "10.0.0.5"]
+  # 이 값은 DB에도 저장되며 설정 페이지에서 변경하면 DB 값이 우선합니다.
+  initial_allowed_ips: []
+
+database:
+  # SQLite DB 파일 경로 (hub.py 기준 상대경로 또는 절대경로)
+  path: "hub_data.db"

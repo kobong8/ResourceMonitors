@@ -205,3 +205,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Resource Monitor runtime and local build environment
+*.log.*
+*.db
+*.db-*
+agent/.venv-build/
+.test-artifacts/

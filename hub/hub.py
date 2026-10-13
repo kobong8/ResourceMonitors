@@ -5,6 +5,7 @@ Resource Monitor Hub
 """
 
 import os
+import math
 import sys
 import json
 import secrets
@@ -104,7 +105,7 @@ def init_db():
 
     # 기본 설정
     defaults = {
-        'allowed_ips': json.dumps([]),
+        'allowed_ips': json.dumps(CONFIG.get('security', {}).get('initial_allowed_ips', [])),
         'programs_to_check_running': json.dumps([
             {'name': 'Chrome', 'process': 'chrome'},
             {'name': 'Visual Studio Code', 'process': 'code'},
@@ -144,10 +145,7 @@ def set_setting(key: str, value: str):
 # ──────────────────────────────────────────────
 
 def get_client_ip() -> str:
-    """실제 클라이언트 IP (프록시 고려)"""
-    forwarded = request.headers.get('X-Forwarded-For')
-    if forwarded:
-        return forwarded.split(',')[0].strip()
+    """직접 연결한 클라이언트 IP만 신뢰합니다."""
     return request.remote_addr or '0.0.0.0'
 
 
@@ -190,9 +188,9 @@ def validate_api_key() -> bool:
     """에이전트 API 키 검증 (timing-safe)"""
     expected = CONFIG.get('security', {}).get('api_key', '')
     provided = request.headers.get('X-API-Key', '')
-    if not expected:        # 키 미설정 시 개발 편의를 위해 허용 (운영 환경에서는 반드시 설정)
-        return True
-    return secrets.compare_digest(provided, expected)
+    if not expected or expected.startswith('CHANGE_THIS'):
+        return False
+    return secrets.compare_digest(provided.encode('utf-8'), expected.encode('utf-8'))
 
 
 def require_api_key(f):
@@ -275,6 +273,26 @@ def api_report():
         if not hostname or len(hostname) > 255:
             return jsonify({'error': 'Invalid hostname'}), 400
 
+        # Reject malformed measurements before they can break dashboard rendering.
+        try:
+            for section in ('cpu', 'memory'):
+                metrics = data.get(section, {})
+                if not isinstance(metrics, dict):
+                    raise ValueError(section)
+                value = metrics.get('percent', 0)
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 100:
+                    raise ValueError(section)
+            for section in ('gpu', 'remote_sessions'):
+                if not isinstance(data.get(section, []), list) or not all(
+                    isinstance(item, dict) for item in data.get(section, [])
+                ):
+                    raise ValueError(section)
+            for section in ('running_programs', 'installed_programs'):
+                if not isinstance(data.get(section, {}), dict):
+                    raise ValueError(section)
+        except ValueError:
+            return jsonify({'error': 'Invalid measurements'}), 400
+
         ip_address = str(data.get('ip_address', ''))[:64]
         now_str = datetime.now().isoformat()
 
@@ -292,14 +310,14 @@ def api_report():
         db.execute(
             'INSERT INTO data_history(hostname, timestamp, cpu_percent, memory_percent, gpu_data)'
             ' VALUES(?,?,?,?,?)',
-            (hostname, data.get('timestamp', now_str), cpu_pct, mem_pct, gpu_json),
+            (hostname, now_str, cpu_pct, mem_pct, gpu_json),
         )
 
         # 24시간 이상 된 히스토리 자동 삭제
         db.execute(
             "DELETE FROM data_history WHERE hostname=?"
-            " AND timestamp < datetime('now','-24 hours')",
-            (hostname,),
+            " AND timestamp < ?",
+            (hostname, (datetime.now() - timedelta(hours=24)).isoformat()),
         )
         db.commit()
 
@@ -373,9 +391,9 @@ def computer_detail(hostname):
     history_rows = db.execute(
         '''SELECT timestamp, cpu_percent, memory_percent, gpu_data
            FROM data_history
-           WHERE hostname=? AND timestamp > datetime('now','-1 hour')
+           WHERE hostname=? AND timestamp > ?
            ORDER BY timestamp ASC''',
-        (hostname,),
+        (hostname, (datetime.now() - timedelta(hours=1)).isoformat()),
     ).fetchall()
 
     history = {'timestamps': [], 'cpu': [], 'memory': [], 'gpu': {}}
@@ -383,16 +401,19 @@ def computer_detail(hostname):
         history['timestamps'].append(h['timestamp'])
         history['cpu'].append(h['cpu_percent'])
         history['memory'].append(h['memory_percent'])
+        for values in history['gpu'].values():
+            values['utilization'].append(None)
+            values['memory_percent'].append(None)
         for gpu in json.loads(h['gpu_data'] or '[]'):
             idx = str(gpu.get('index', 0))
             if idx not in history['gpu']:
                 history['gpu'][idx] = {
                     'name': gpu.get('name', f'GPU {idx}'),
-                    'utilization': [],
-                    'memory_percent': [],
+                    'utilization': [None] * len(history['timestamps']),
+                    'memory_percent': [None] * len(history['timestamps']),
                 }
-            history['gpu'][idx]['utilization'].append(gpu.get('utilization_percent'))
-            history['gpu'][idx]['memory_percent'].append(gpu.get('memory_percent'))
+            history['gpu'][idx]['utilization'][-1] = gpu.get('utilization_percent')
+            history['gpu'][idx]['memory_percent'][-1] = gpu.get('memory_percent')
 
     return render_template(
         'detail.html',
@@ -445,6 +466,8 @@ def settings():
                 installed_raw = request.form.get('programs_installed', '[]')
                 running = json.loads(running_raw)
                 installed = json.loads(installed_raw)
+                if not isinstance(running, list) or not isinstance(installed, list):
+                    raise ValueError('프로그램 목록은 배열이어야 합니다.')
                 # 기본 유효성 검사
                 for item in running + installed:
                     if not isinstance(item, dict):

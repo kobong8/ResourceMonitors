@@ -5,6 +5,9 @@ Resource Monitor Agent
 """
 
 import os
+import argparse
+from logging.handlers import RotatingFileHandler
+from urllib.parse import urlparse
 import sys
 import json
 import time
@@ -28,31 +31,49 @@ try:
 except Exception:
     NVML_AVAILABLE = False
 
-# 로깅 설정
-LOG_PATH = Path(__file__).parent / 'agent.log'
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(str(LOG_PATH), encoding='utf-8'),
-    ]
-)
+# Frozen executables must use the external EXE directory, not _MEIPASS.
+def application_dir() -> Path:
+    return Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
+
+
+CONFIG_PATH = application_dir() / 'config.yaml'
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path(__file__).parent / 'config.yaml'
+
+def setup_logging(log_dir: Path):
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            RotatingFileHandler(log_dir / 'agent.log', maxBytes=5 * 1024 * 1024,
+                                backupCount=3, encoding='utf-8'),
+        ],
+        force=True,
+    )
 
 
 # ──────────────────────────────────────────────
 # 설정 로드
 # ──────────────────────────────────────────────
 
-def load_config() -> dict:
-    if not CONFIG_PATH.exists():
-        logger.error(f"설정 파일을 찾을 수 없습니다: {CONFIG_PATH}")
-        sys.exit(1)
-    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+def load_config(path: Path = CONFIG_PATH) -> dict:
+    with path.open('r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    if not isinstance(config, dict):
+        raise ValueError("설정은 YAML 객체여야 합니다.")
+    hub = config.get('hub', {})
+    url = urlparse(hub.get('url', ''))
+    if url.scheme not in ('http', 'https') or not url.hostname:
+        raise ValueError("hub.url에 유효한 http/https 주소가 필요합니다.")
+    key = hub.get('api_key', '')
+    if not isinstance(key, str) or not key.strip() or key.startswith('CHANGE_THIS'):
+        raise ValueError("hub.api_key를 Hub와 동일한 실제 키로 변경하세요.")
+    interval = config.get('agent', {}).get('report_interval_seconds', 30)
+    if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1:
+        raise ValueError("report_interval_seconds는 1 이상의 정수여야 합니다.")
+    return config
 
 
 # ──────────────────────────────────────────────
@@ -62,14 +83,15 @@ def load_config() -> dict:
 def get_ip_address() -> str:
     """현재 컴퓨터의 주 IP 주소 반환"""
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(3)
-        s.connect(("192.168.1.1", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(3)
+            s.connect(("192.168.1.1", 80))
+            return s.getsockname()[0]
     except Exception:
-        return socket.gethostbyname(socket.gethostname())
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return '127.0.0.1'
 
 
 def get_cpu_info() -> dict:
@@ -193,11 +215,12 @@ def get_remote_sessions() -> list:
             )
             if result.returncode == 0:
                 for line in result.stdout.strip().split('\n')[1:]:
-                    if 'Active' in line:
+                    if line.lstrip('> ').lower().startswith('rdp-tcp#') and any(
+                        state in line for state in ('Active', '활성')):
                         parts = line.split()
                         sessions.append({
-                            'type': 'RDP/Console',
-                            'user': parts[0].lstrip('>') if parts else '',
+                            'type': 'RDP',
+                            'user': parts[1] if len(parts) > 1 else '',
                             'state': 'Active',
                             'remote_ip': '',
                         })
@@ -217,6 +240,8 @@ def get_remote_sessions() -> list:
                         remote_ip = ''
                         if len(parts) >= 5 and '(' in parts[-1]:
                             remote_ip = parts[-1].strip('()')
+                        if not remote_ip or remote_ip.startswith(':'):
+                            continue
                         sessions.append({
                             'type': 'SSH/Terminal',
                             'user': parts[0],
@@ -275,7 +300,6 @@ def check_running_programs(programs: list) -> dict:
         is_running = (
             proc_name in running
             or proc_name + '.exe' in running
-            or any(proc_name in p for p in running)
         )
         result[prog['name']] = is_running
 
@@ -308,7 +332,8 @@ def check_installed_programs(programs: list) -> dict:
         cmd_parts = check_cmd.split()
         base_cmd = os.path.basename(cmd_parts[0]).lower().replace('.exe', '')
 
-        if base_cmd not in ALLOWED_COMMANDS:
+        if (base_cmd not in ALLOWED_COMMANDS or len(cmd_parts) != 2
+                or cmd_parts[1] not in ('--version', '-V', '-version')):
             logger.warning(f"허용되지 않은 명령어: {cmd_parts[0]}")
             result[prog['name']] = False
             continue
@@ -362,7 +387,7 @@ def collect_system_info(config: dict) -> dict:
     }
 
 
-def report_to_hub(config: dict, data: dict) -> None:
+def report_to_hub(config: dict, data: dict) -> bool:
     """Hub 서버에 데이터 전송"""
     hub_cfg = config.get('hub', {})
     hub_url = hub_cfg.get('url', 'http://localhost:5000').rstrip('/')
@@ -377,12 +402,15 @@ def report_to_hub(config: dict, data: dict) -> None:
         )
         if resp.status_code == 200:
             logger.info(f"데이터 전송 성공 → {hub_url}  [{data['hostname']}]")
+            return True
         else:
             logger.warning(f"Hub 응답 오류: HTTP {resp.status_code}")
     except requests.exceptions.ConnectionError:
         logger.warning(f"Hub 연결 실패: {hub_url}")
     except Exception as e:
         logger.error(f"데이터 전송 오류: {e}")
+
+    return False
 
 
 def fetch_hub_monitoring_config(config: dict) -> dict | None:
@@ -408,11 +436,21 @@ def fetch_hub_monitoring_config(config: dict) -> dict | None:
 # 메인 루프
 # ──────────────────────────────────────────────
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Resource Monitor Agent")
+    parser.add_argument('--config', type=Path, default=CONFIG_PATH, help="설정 YAML 경로 (기본: EXE 옆 config.yaml)")
+    parser.add_argument('--log-dir', type=Path, default=Path(os.environ.get('LOCALAPPDATA', str(application_dir()))) / 'ResourceMonitorAgent', help="로그 디렉터리")
+    parser.add_argument('--once', action='store_true', help="한 번 수집/전송하고 성공 0, 실패 1로 종료")
+    args = parser.parse_args(argv)
+    try:
+        setup_logging(args.log_dir)
+        config = load_config(args.config)
+    except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError) as exc:
+        print(f"Agent 시작 실패: {exc}", file=sys.stderr)
+        return 1
     logger.info("=" * 50)
     logger.info("Resource Monitor Agent 시작")
 
-    config = load_config()
     interval = int(config.get('agent', {}).get('report_interval_seconds', 30))
     config_refresh_interval = 300  # 5분마다 Hub에서 설정 갱신
 
@@ -434,7 +472,9 @@ def main():
                 last_config_fetch = time.time()
 
             data = collect_system_info(config)
-            report_to_hub(config, data)
+            success = report_to_hub(config, data)
+            if args.once:
+                return 0 if success else 1
             time.sleep(interval)
 
         except KeyboardInterrupt:
@@ -442,8 +482,11 @@ def main():
             break
         except Exception as e:
             logger.error(f"예기치 않은 오류: {e}", exc_info=True)
+            if args.once:
+                return 1
             time.sleep(interval)
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
